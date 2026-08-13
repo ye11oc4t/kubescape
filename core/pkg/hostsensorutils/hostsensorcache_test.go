@@ -2,6 +2,7 @@ package hostsensorutils
 
 import (
 	"os"
+	"sync"
 	"testing"
 
 	restclient "k8s.io/client-go/rest"
@@ -90,6 +91,40 @@ func TestHostSensorCache_OptInRoundTrip(t *testing.T) {
 	withK8sHost(t, "https://cluster-b.example.com")
 	_, err = loadFromCache("kubernetes-admin@kubernetes", "KubeletInfo")
 	assert.Error(t, err, "cluster B must not read cluster A's cached host data")
+}
+
+func TestSaveToCache_ConcurrentWritersUseDistinctTemporaryFiles(t *testing.T) {
+	withTempCacheDir(t)
+	t.Setenv(HostSensorCacheTtlEnvVar, "1h")
+	withK8sHost(t, "https://cluster-a.example.com")
+
+	var ready sync.WaitGroup
+	ready.Add(2)
+	release := make(chan struct{})
+	renameAtBarrier := func(oldPath, newPath string) error {
+		ready.Done()
+		<-release
+		return os.Rename(oldPath, newPath)
+	}
+
+	errCh := make(chan error, 2)
+	for _, name := range []string{"node-a", "node-b"} {
+		env := hostsensor.HostSensorDataEnvelope{}
+		env.SetName(name)
+		go func() {
+			errCh <- saveToCacheWithRename("ctx", "KubeletInfo", []hostsensor.HostSensorDataEnvelope{env}, renameAtBarrier)
+		}()
+	}
+
+	ready.Wait()
+	close(release)
+	require.NoError(t, <-errCh)
+	require.NoError(t, <-errCh)
+
+	got, err := loadFromCache("ctx", "KubeletInfo")
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Contains(t, []string{"node-a", "node-b"}, got[0].GetName())
 }
 
 // TestLoadFromCache_UnresolvedClusterIdentityIsRejected guards against the
