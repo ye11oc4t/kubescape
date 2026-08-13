@@ -36,3 +36,23 @@ func TestNewHostSensorHandlerDoesNotMutateSharedK8sConfig(t *testing.T) {
 	assert.Equal(t, "application/json", sharedConfig.AcceptContentTypes)
 	assert.Equal(t, "application/json", sharedConfig.ContentType)
 }
+
+func TestNewHostSensorHandlerLimitsNodeAvailabilityProbe(t *testing.T) {
+	sharedConfig := &rest.Config{Host: "https://cluster.example.test"}
+	originalConfig := k8sinterface.K8SConfig
+	k8sinterface.K8SConfig = sharedConfig
+	t.Cleanup(func() {
+		k8sinterface.K8SConfig = originalConfig
+	})
+
+	k8sObj := NewKubernetesApiMock(WithNode(v1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-1"}}))
+	k8sObj.Context = context.Background()
+
+	_, err := NewHostSensorHandler(k8sObj, "")
+	require.NoError(t, err)
+
+	client := k8sObj.KubernetesClient.(*k8sClientMock)
+	nodes := client.corev1.nodes.(*nodeMock)
+	require.Len(t, nodes.listOptions, 1)
+	assert.Equal(t, int64(1), nodes.listOptions[0].Limit)
+}

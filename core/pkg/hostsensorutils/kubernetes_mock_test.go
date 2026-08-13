@@ -86,6 +86,7 @@ type (
 	nodeMock struct {
 		corev1.NodeInterface
 		*k8sMockOptions
+		listOptions []metav1.ListOptions
 	}
 
 	namespaceMock struct {
@@ -404,7 +405,8 @@ func (n *namespaceMock) Get(_ context.Context, name string, _ metav1.GetOptions)
 	return nil, fmt.Errorf("namespace not found: %s", name)
 }
 
-func (n *nodeMock) List(_ context.Context, _ metav1.ListOptions) (*v1.NodeList, error) {
+func (n *nodeMock) List(_ context.Context, opts metav1.ListOptions) (*v1.NodeList, error) {
+	n.listOptions = append(n.listOptions, opts)
 	nodes := &v1.NodeList{
 		TypeMeta: metav1.TypeMeta{
 			Kind:       "NodeList",
