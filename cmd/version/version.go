@@ -22,6 +22,7 @@ func GetVersionCmd(ks meta.IKubescape, version, commit, date string) *cobra.Comm
 		Use:   "version",
 		Short: "Get current version",
 		Long:  ``,
+		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			switch outputFormat {
 			case "json":
@@ -40,10 +41,14 @@ func GetVersionCmd(ks meta.IKubescape, version, commit, date string) *cobra.Comm
 				v := versioncheck.NewIVersionCheckHandler(ks.Context())
 				_ = v.CheckLatestVersion(ks.Context(), versioncheck.NewVersionCheckRequest("", version, "", "", "version", nil))
 
-				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Your current version is: %s\n", version)
-				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Build commit: %s\n", commit)
-				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Build date: %s\n", date)
-				return nil
+				if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Your current version is: %s\n", version); err != nil {
+					return err
+				}
+				if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Build commit: %s\n", commit); err != nil {
+					return err
+				}
+				_, err := fmt.Fprintf(cmd.OutOrStdout(), "Build date: %s\n", date)
+				return err
 			default:
 				return fmt.Errorf("unsupported format %q, supported: text, json", outputFormat)
 			}
