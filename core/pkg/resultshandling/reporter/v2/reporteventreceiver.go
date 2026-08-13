@@ -3,6 +3,7 @@ package reporter
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"time"
@@ -259,13 +260,17 @@ func (report *ReportEventReceiver) sendReport(postureReport *reporthandlingv2.Po
 
 	strResponse, err := report.client.SubmitReport(postureReport)
 	if err != nil {
+		submitErr := fmt.Errorf("%w:%s", err, strResponse)
+
 		// in case of error, we need to revert the generated account ID
 		// otherwise the next run will fail using a non existing account ID
 		if report.accountIdGenerated {
-			report.tenantConfig.DeleteCredentials()
+			if cleanupErr := report.tenantConfig.DeleteCredentials(); cleanupErr != nil {
+				return errors.Join(submitErr, fmt.Errorf("failed to delete generated credentials: %w", cleanupErr))
+			}
 		}
 
-		return fmt.Errorf("%w:%s", err, strResponse)
+		return submitErr
 	}
 
 	// message is taken only from last report
