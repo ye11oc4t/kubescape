@@ -22,9 +22,10 @@ import (
 var mxStdio sync.Mutex
 
 type TenantConfigMock struct {
-	clusterName string
-	accountID   string
-	accessKey   string
+	clusterName            string
+	accountID              string
+	accessKey              string
+	generateAccountIDCalls int
 }
 
 const testGeneratedAccountIDString = "6a1ff233-5297-4193-bb51-5d67bc841cbf"
@@ -58,6 +59,7 @@ func (tcm *TenantConfigMock) GetCloudAPIURL() string {
 }
 
 func (tcm *TenantConfigMock) GenerateAccountID() (string, error) {
+	tcm.generateAccountIDCalls++
 	tcm.accountID = testGeneratedAccountIDString
 	return testGeneratedAccountIDString, nil
 }
@@ -256,12 +258,13 @@ func TestSubmit(t *testing.T) {
 			v1.WithHTTPClient(hijackedClient(t, srv))) // re-route the http client to our mock server, as this is not easily configurable in the reporter.
 		require.NoError(t, err)
 
+		tenant := &TenantConfigMock{
+			clusterName: "",
+			accountID:   "",
+			accessKey:   accessKey,
+		}
 		reporter := NewReportEventReceiver(
-			&TenantConfigMock{
-				clusterName: "",
-				accountID:   account,
-				accessKey:   accessKey,
-			},
+			tenant,
 			"cbabd56f-bac6-416a-836b-b815ef347647",
 			SubmitContextScan,
 			ksCloud,
@@ -285,6 +288,8 @@ func TestSubmit(t *testing.T) {
 		require.NoError(t,
 			reporter.Submit(ctx, opaSession),
 		)
+		assert.Zero(t, tenant.generateAccountIDCalls)
+		assert.Empty(t, tenant.accountID)
 		require.NoError(t, capture.Close())
 
 		buf, err := os.ReadFile(capture.Name())

@@ -58,6 +58,11 @@ func (report *ReportEventReceiver) Submit(ctx context.Context, opaSessionObj *ca
 	defer span.End()
 	report.reportTime = time.Now().UTC()
 
+	if opaSessionObj.Metadata.ScanMetadata.ScanningTarget == reporthandlingv2.Cluster && report.GetClusterName() == "" {
+		logger.L().Ctx(ctx).Error("failed to publish results because the cluster name is Unknown. If you are scanning YAML files the results are not submitted to the Kubescape SaaS")
+		return nil
+	}
+
 	if report.GetAccountID() == "" {
 		accountID, err := report.tenantConfig.GenerateAccountID()
 		if err != nil {
@@ -68,11 +73,6 @@ func (report *ReportEventReceiver) Submit(ctx context.Context, opaSessionObj *ca
 		report.client.SetAccountID(accountID)
 		getter.SetKSCloudAPIConnector(report.client)
 		logger.L().Debug("generated account ID", helpers.String("account ID", accountID))
-	}
-
-	if opaSessionObj.Metadata.ScanMetadata.ScanningTarget == reporthandlingv2.Cluster && report.GetClusterName() == "" {
-		logger.L().Ctx(ctx).Error("failed to publish results because the cluster name is Unknown. If you are scanning YAML files the results are not submitted to the Kubescape SaaS")
-		return nil
 	}
 
 	if err := report.prepareReport(opaSessionObj); err != nil {
