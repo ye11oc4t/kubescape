@@ -93,6 +93,46 @@ func TestTenantConfigCacheLifecycleDataDriven(t *testing.T) {
 	}
 }
 
+func TestTenantConfigCacheDeleteErrorsDataDriven(t *testing.T) {
+	tests := []struct {
+		name      string
+		newConfig func() ITenantConfig
+	}{
+		{
+			name: "local configuration",
+			newConfig: func() ITenantConfig {
+				return &LocalConfig{configObj: &ConfigObj{}}
+			},
+		},
+		{
+			name: "cluster configuration",
+			newConfig: func() ITenantConfig {
+				return &ClusterConfig{configObj: &ConfigObj{}}
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			useTemporaryConfigStore(t)
+			config := test.newConfig()
+
+			// Deleting an already-absent cache remains idempotent.
+			require.NoError(t, config.DeleteCachedConfig(context.Background()))
+
+			// A non-empty directory at the cache-file path makes os.Remove fail
+			// reliably without relying on platform-specific permission handling.
+			require.NoError(t, os.MkdirAll(ConfigFileFullPath(), 0o700))
+			require.NoError(t, os.WriteFile(filepath.Join(ConfigFileFullPath(), "keep"), []byte("data"), 0o600))
+
+			err := config.DeleteCachedConfig(context.Background())
+			require.Error(t, err)
+			_, statErr := os.Stat(ConfigFileFullPath())
+			require.NoError(t, statErr)
+		})
+	}
+}
+
 func TestNewLocalConfigPrecedenceDataDriven(t *testing.T) {
 	tests := []struct {
 		name              string

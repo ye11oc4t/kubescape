@@ -3,6 +3,7 @@ package cautils
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -175,8 +176,9 @@ func (lc *LocalConfig) UpdateCachedConfig() error {
 }
 
 func (lc *LocalConfig) DeleteCachedConfig(ctx context.Context) error {
-	if err := DeleteConfigFile(); err != nil {
+	if err := DeleteConfigFile(); err != nil && !errors.Is(err, os.ErrNotExist) {
 		logger.L().Ctx(ctx).Warning("failed to delete cached config", helpers.Error(err))
+		return err
 	}
 	return nil
 }
@@ -266,8 +268,9 @@ func (c *ClusterConfig) UpdateCachedConfig() error {
 }
 
 func (c *ClusterConfig) DeleteCachedConfig(ctx context.Context) error {
-	if err := DeleteConfigFile(); err != nil {
+	if err := DeleteConfigFile(); err != nil && !errors.Is(err, os.ErrNotExist) {
 		logger.L().Ctx(ctx).Warning("failed to delete cached config", helpers.Error(err))
+		return err
 	}
 	return nil
 }
