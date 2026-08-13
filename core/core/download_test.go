@@ -151,6 +151,15 @@ func TestSetPathAndFilename(t *testing.T) {
 			expectedFilename: "path.json",
 		},
 		{
+			// A directory name that merely contains ".json" must not be
+			// reinterpreted as an output file.
+			downloadInfo: &metav1.DownloadInfo{
+				Path: filepath.Join("path", "to", "report.json.bak"),
+			},
+			expectedPath:     filepath.Join("path", "to", "report.json.bak"),
+			expectedFilename: "",
+		},
+		{
 			downloadInfo: &metav1.DownloadInfo{
 				Path: filepath.Join("path", "to"),
 			},

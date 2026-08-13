@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 
 	"github.com/kubescape/go-logger"
 	"github.com/kubescape/go-logger/helpers"
@@ -136,7 +135,7 @@ func setPathAndFilename(downloadInfo *metav1.DownloadInfo) {
 	}
 	// Intentionally restricted to ".json" and left as-is: an existing
 	// TestSetPathAndFilename case enshrines .txt-in-dir-as-directory behavior.
-	if strings.Contains(file, ".json") {
+	if filepath.Ext(file) == ".json" {
 		downloadInfo.Path = filepath.Clean(dir)
 		downloadInfo.FileName = file
 	}
