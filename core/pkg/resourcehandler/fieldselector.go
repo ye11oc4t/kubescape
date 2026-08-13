@@ -69,11 +69,16 @@ func (es *ExcludeSelector) GetNamespacesSelectors(resource *schema.GroupVersionR
 
 func (is *IncludeSelector) GetNamespacesSelectors(resource *schema.GroupVersionResource, namespaced *bool) []string {
 	fieldSelectors := []string{}
+	seen := make(map[string]struct{})
 	for n := range strings.SplitSeq(is.namespace, FieldSelectorsSeparator) {
 		n = strings.TrimSpace(n)
 		if n == "" {
 			continue
 		}
+		if _, ok := seen[n]; ok {
+			continue
+		}
+		seen[n] = struct{}{}
 		sel := getNamespacesSelectorWithOptionalScope(resource, n, FieldSelectorsEqualsOperator, namespaced)
 		if sel == "" {
 			// Cluster-scoped target: per-namespace filtering is meaningless, so a

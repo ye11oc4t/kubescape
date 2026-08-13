@@ -77,4 +77,10 @@ func TestIncludeNamespacesSelectors(t *testing.T) {
 	assert.Equal(t, 2, len(malformedSelectors))
 	assert.Equal(t, "metadata.namespace==ns1", malformedSelectors[0])
 	assert.Equal(t, "metadata.namespace==ns3", malformedSelectors[1])
+
+	// Repeated include values must not issue the same LIST more than once or
+	// append duplicate resource IDs to the scan input.
+	duplicates := NewIncludeSelector("default, ingress,default,ingress")
+	duplicateSelectors := duplicates.GetNamespacesSelectors(&schema.GroupVersionResource{Resource: "pods"}, nil)
+	assert.Equal(t, []string{"metadata.namespace==default", "metadata.namespace==ingress"}, duplicateSelectors)
 }
