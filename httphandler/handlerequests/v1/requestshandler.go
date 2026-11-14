@@ -291,7 +291,11 @@ func (handler *HTTPHandler) Scan(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		if response.Type == utilsapisv1.ResultsV1ScanResponseType || response.Type == partialScanResponseType {
+		partialWithoutArtifact := false
+		if partial, ok := response.Response.(partialScanResponse); ok {
+			partialWithoutArtifact = partial.ArtifactID == ""
+		}
+		if response.Type == utilsapisv1.ResultsV1ScanResponseType || response.Type == partialScanResponseType && !partialWithoutArtifact {
 			// populate the response with the report before it is deleted below
 			if res, err := readResultsFile(scanID); err != nil {
 				response.Type = utilsapisv1.ErrorScanResponseType
@@ -481,6 +485,7 @@ func (handler *HTTPHandler) GetResults(w http.ResponseWriter, r *http.Request) {
 	} else {
 		logger.L().Info("scan result found", helpers.String("ID", resultsQueryParams.ScanID))
 		if partial, ok := partialResponseFromArtifact(res, resultsQueryParams.ScanID); ok {
+			partial = readPartialDelivery(partial)
 			w.WriteHeader(http.StatusInternalServerError)
 			response.Type, response.Response = partialScanResponseType, partial
 		} else {

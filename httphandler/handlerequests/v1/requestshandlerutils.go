@@ -62,11 +62,17 @@ func withCanonicalResultPersistence(ctx context.Context) context.Context {
 // failure, queued-cancel, panic) funnels through here so none can silently
 // skip the at-least-once signal. Failures beyond postScanCallback's own retry
 // bounds are logged, not re-queued. Safe on nil scanReq/ctx.
-func deliverScanCallback(scanReq *scanRequestParams, status, errMsg string) {
+func deliverScanCallback(scanReq *scanRequestParams, status, errMsg string, partial ...partialScanResponse) {
 	if scanReq == nil || scanReq.callbackURL == "" {
 		return
 	}
 	payload := scanCallbackPayload{ID: scanReq.scanID, Status: status, Error: errMsg}
+	if len(partial) > 0 {
+		payload.Completion = partial[0].Completion
+		payload.ArtifactID = partial[0].ArtifactID
+		payload.DeliveryStatus = partial[0].DeliveryStatus
+		payload.DeliveryCode = partial[0].DeliveryCode
+	}
 	cbCtx := context.Background()
 	if scanReq.ctx != nil {
 		cbCtx = context.WithoutCancel(scanReq.ctx)
@@ -200,7 +206,7 @@ func (handler *HTTPHandler) executeScan(scanReq *scanRequestParams) {
 	feedScanResponse(scanReq, response)
 
 	if partial != nil {
-		deliverScanCallback(scanReq, "partial", "scan interrupted; retrieve the partial artifact")
+		deliverScanCallback(scanReq, "partial", "scan interrupted; retrieve the partial artifact", partial.response())
 	} else if err != nil {
 		deliverScanCallback(scanReq, callbackStatusFailed, "scan failed")
 	} else {
@@ -466,6 +472,7 @@ func removeResultsFile(fileID string) error {
 	// base. Do not glob cleanID+".*": UUID-adjacent files may be unrelated.
 	extensions := []string{
 		"",
+		".delivery.json",
 		printer.JsonOutputExt,
 		printer.JunitOutputExt,
 		printer.SARIFOutputExt,
@@ -734,9 +741,13 @@ const (
 // is at-least-once and best-effort with no durability across server restarts,
 // so receivers must dedup on ID and keep a poll/reconcile fallback.
 type scanCallbackPayload struct {
-	ID     string `json:"id"`
-	Status string `json:"status"`
-	Error  string `json:"error,omitempty"`
+	Completion     *cautils.ScanCompletionMetadata `json:"scanCompletion,omitempty"`
+	ArtifactID     string                          `json:"artifactID,omitempty"`
+	DeliveryStatus string                          `json:"deliveryStatus,omitempty"`
+	DeliveryCode   string                          `json:"deliveryCode,omitempty"`
+	ID             string                          `json:"id"`
+	Status         string                          `json:"status"`
+	Error          string                          `json:"error,omitempty"`
 }
 
 // ipResolver is the subset of net.Resolver used for callback host screening;

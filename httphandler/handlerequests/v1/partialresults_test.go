@@ -65,7 +65,7 @@ func TestHTTPPartialScanSyncAndPoll(t *testing.T) {
 	require.NotEmpty(t, response.Response.Artifact)
 	require.Equal(t, 1, p.closes)
 	w = httptest.NewRecorder()
-	h.GetResults(w, httptest.NewRequest(http.MethodGet, "/results?scanID="+response.ID+"&keep=true", nil))
+	h.GetResults(w, httptest.NewRequest(http.MethodGet, "/results?id="+response.ID+"&keep=true", nil))
 	require.Equal(t, http.StatusInternalServerError, w.Code, w.Body.String())
 	require.Contains(t, w.Body.String(), `"status":"partial"`)
 	require.Contains(t, w.Body.String(), `"artifact"`)

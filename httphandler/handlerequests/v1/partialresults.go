@@ -51,7 +51,32 @@ func (e *partialScanError) response() partialScanResponse {
 func preservePartialScan(ctx context.Context, result *resultshandling.ResultsHandler, info *cautils.ScanInfo, id string, primary error) error {
 	deliveryErr := result.HandleResults(context.WithoutCancel(ctx), info)
 	persistErr := persistPartialCanonicalResult(result, id)
-	return &partialScanError{id: id, completion: result.ScanData.ScanCompletion, scanErr: primary, deliveryErr: errors.Join(deliveryErr, persistErr), persisted: persistErr == nil}
+	partial := &partialScanError{id: id, completion: result.ScanData.ScanCompletion, scanErr: primary, deliveryErr: errors.Join(deliveryErr, persistErr), persisted: persistErr == nil}
+	if partial.persisted {
+		data, marshalErr := json.Marshal(partial.response())
+		if marshalErr == nil {
+			marshalErr = os.WriteFile(filepath.Join(OutputDir, id+".delivery.json"), data, 0o600)
+		}
+		partial.deliveryErr = errors.Join(partial.deliveryErr, marshalErr)
+	}
+	return partial
+}
+
+func readPartialDelivery(fallback partialScanResponse) partialScanResponse {
+	parsed, err := uuid.Parse(fallback.ArtifactID)
+	if err != nil {
+		return fallback
+	}
+	data, err := os.ReadFile(filepath.Join(OutputDir, parsed.String()+".delivery.json"))
+	if err != nil {
+		return fallback
+	}
+	var persisted partialScanResponse
+	if json.Unmarshal(data, &persisted) != nil || persisted.ArtifactID != fallback.ArtifactID {
+		return fallback
+	}
+	persisted.Artifact = fallback.Artifact
+	return persisted
 }
 
 func persistPartialCanonicalResult(result *resultshandling.ResultsHandler, id string) (err error) {
