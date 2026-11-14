@@ -315,6 +315,9 @@ func GetOutputPrinters(scanInfo *cautils.ScanInfo, ctx context.Context, clusterN
 	outputPrinters := make([]printer.IPrinter, 0, len(formats))
 	for _, format := range formats {
 		printerHandler := resultshandling.NewPrinter(ctx, format, scanInfo, clusterName)
+		if deferred, _ := ctx.Value(outcomeWritersKey{}).(bool); deferred {
+			printerHandler = printer.NewDeferredPrinter(printerHandler, func() error { return ValidateOutputPrinters(scanInfo) })
+		}
 		if err := printerHandler.SetWriter(ctx, scanInfo.Output); err != nil {
 			setupErr := fmt.Errorf("configure %q output: %w", format, err)
 			return nil, errors.Join(setupErr, closePrinters(append(outputPrinters, printerHandler)...))
@@ -909,7 +912,12 @@ func (ks *Kubescape) ScanWithOutcome(ctx context.Context, scanInfo *cautils.Scan
 	return outcome
 }
 
+type outcomeWritersKey struct{}
+
 func (ks *Kubescape) scanContext(ctx context.Context, scanInfo *cautils.ScanInfo, policyIdentifiers []cautils.PolicyIdentifier, allowPartial bool) (scanResult *resultshandling.ResultsHandler, scanErr error) {
+	if allowPartial {
+		ctx = context.WithValue(ctx, outcomeWritersKey{}, true)
+	}
 	stage := cautils.StageInitialization
 	var partialErr error
 	defer func() {
