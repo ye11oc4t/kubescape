@@ -44,7 +44,8 @@ var scanImpl = scan // Override for testing
 
 // runKubescapeScan is the scanner construction seam used by lifecycle tests.
 var runKubescapeScan = func(ctx context.Context, scanInfo *cautils.ScanInfo, policyIdentifiers []cautils.PolicyIdentifier) (*resultshandling.ResultsHandler, error) {
-	return core.NewKubescape(ctx).Scan(scanInfo, policyIdentifiers)
+	outcome := core.NewKubescape(ctx).ScanWithOutcome(ctx, scanInfo, policyIdentifiers)
+	return outcome.Results, outcome.Err
 }
 
 // canonicalResultPersistenceKey marks scans submitted through /v1/scan. The
@@ -166,7 +167,11 @@ func (handler *HTTPHandler) executeScan(scanReq *scanRequestParams) {
 		scanCtx = withCanonicalResultPersistence(scanCtx)
 	}
 	_, err := scanImpl(scanCtx, scanReq.scanInfo, scanReq.policyIdentifiers, scanReq.scanID, scanReq.scanQueryParams.SkipPersistence)
-	if err != nil {
+	var partial *partialScanError
+	if errors.As(err, &partial) {
+		response.Type = partialScanResponseType
+		response.Response = partial.response()
+	} else if err != nil {
 		if errors.Is(scanReq.ctx.Err(), context.Canceled) {
 			logger.L().Ctx(scanReq.ctx).Info("scan cancelled", helpers.String("ID", scanReq.scanID))
 			removeResultsFile(scanReq.scanID)
@@ -194,7 +199,9 @@ func (handler *HTTPHandler) executeScan(scanReq *scanRequestParams) {
 	// return results, if someone's waiting for them; never block.
 	feedScanResponse(scanReq, response)
 
-	if err != nil {
+	if partial != nil {
+		deliverScanCallback(scanReq, "partial", "scan interrupted; retrieve the partial artifact")
+	} else if err != nil {
 		deliverScanCallback(scanReq, callbackStatusFailed, "scan failed")
 	} else {
 		deliverScanCallback(scanReq, callbackStatusCompleted, "")
@@ -272,6 +279,16 @@ func scan(ctx context.Context, scanInfo *cautils.ScanInfo, policyIdentifiers []c
 	)
 
 	result, err := runKubescapeScan(ctx, scanInfo, policyIdentifiers)
+	if err != nil && result.IsPartial() {
+		if !shouldPersistCanonicalResult(ctx, scanInfo) {
+			// JSON requests already target the canonical file; metrics requests
+			// do not carry the user-scan context marker at all.
+			if userScan, _ := ctx.Value(canonicalResultPersistenceKey{}).(bool); !userScan {
+				return nil, errors.Join(err, result.Close())
+			}
+		}
+		return nil, preservePartialScan(ctx, result, scanInfo, scanID, err)
+	}
 	if err != nil {
 		return nil, writeScanErrorToFile(err, scanID)
 	}

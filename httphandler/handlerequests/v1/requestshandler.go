@@ -291,7 +291,7 @@ func (handler *HTTPHandler) Scan(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		if response.Type == utilsapisv1.ResultsV1ScanResponseType {
+		if response.Type == utilsapisv1.ResultsV1ScanResponseType || response.Type == partialScanResponseType {
 			// populate the response with the report before it is deleted below
 			if res, err := readResultsFile(scanID); err != nil {
 				response.Type = utilsapisv1.ErrorScanResponseType
@@ -301,7 +301,13 @@ func (handler *HTTPHandler) Scan(w http.ResponseWriter, r *http.Request) {
 					response.Response = err.Error()
 				}
 			} else {
-				response.Response = res
+				if response.Type == partialScanResponseType {
+					partial := response.Response.(partialScanResponse)
+					partial.Artifact = res
+					response.Response = partial
+				} else {
+					response.Response = res
+				}
 			}
 		}
 
@@ -313,7 +319,7 @@ func (handler *HTTPHandler) Scan(w http.ResponseWriter, r *http.Request) {
 	}
 
 	statusCode := http.StatusOK
-	if response.Type == utilsapisv1.ErrorScanResponseType {
+	if response.Type == utilsapisv1.ErrorScanResponseType || response.Type == partialScanResponseType {
 		statusCode = http.StatusInternalServerError
 	}
 
@@ -474,9 +480,13 @@ func (handler *HTTPHandler) GetResults(w http.ResponseWriter, r *http.Request) {
 		}
 	} else {
 		logger.L().Info("scan result found", helpers.String("ID", resultsQueryParams.ScanID))
-		w.WriteHeader(http.StatusOK)
-		response.Type = utilsapisv1.ResultsV1ScanResponseType
-		response.Response = res
+		if partial, ok := partialResponseFromArtifact(res, resultsQueryParams.ScanID); ok {
+			w.WriteHeader(http.StatusInternalServerError)
+			response.Type, response.Response = partialScanResponseType, partial
+		} else {
+			w.WriteHeader(http.StatusOK)
+			response.Type, response.Response = utilsapisv1.ResultsV1ScanResponseType, res
+		}
 
 		if !resultsQueryParams.KeepResults {
 			if isLatestFallback {
