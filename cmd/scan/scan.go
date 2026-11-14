@@ -502,7 +502,7 @@ func securityScan(scanInfo cautils.ScanInfo, ks meta.IKubescape, policyIdentifie
 // can run the exact same per-cluster behavior once per requested context,
 // instead of a parallel, divergent copy of this logic.
 func runSecurityScan(ctx context.Context, scanInfo *cautils.ScanInfo, ks meta.IKubescape, policyIdentifiers []cautils.PolicyIdentifier) (*resultshandling.ResultsHandler, error) {
-	results, err := ks.ScanContext(ctx, scanInfo, policyIdentifiers)
+	results, err := scanPostureResults(ctx, scanInfo, ks, policyIdentifiers)
 	if err != nil {
 		return nil, err
 	}

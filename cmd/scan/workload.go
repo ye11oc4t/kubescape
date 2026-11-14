@@ -167,7 +167,7 @@ func getWorkloadCmd(ks meta.IKubescape, scanInfo *cautils.ScanInfo) *cobra.Comma
 // can run the exact same per-cluster behavior once per --kube-contexts
 // entry, instead of a parallel, divergent copy of this logic.
 func runWorkloadScan(ctx context.Context, scanInfo *cautils.ScanInfo, ks meta.IKubescape, policyIdentifiers []cautils.PolicyIdentifier) (*resultshandling.ResultsHandler, error) {
-	results, err := ks.ScanContext(ctx, scanInfo, policyIdentifiers)
+	results, err := scanPostureResults(ctx, scanInfo, ks, policyIdentifiers)
 	if err != nil {
 		if errors.Is(err, resourcehandler.ErrResourceNotFound) && scanInfo.NamespaceDefaulted {
 			return nil, fmt.Errorf("%w (%s)", err, cliNamespaceDefaultedHint)
