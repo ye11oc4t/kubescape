@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"slices"
+	"sync"
 
 	"github.com/kubescape/go-logger"
 	"github.com/kubescape/go-logger/helpers"
@@ -33,6 +34,29 @@ type ResultsHandler struct {
 	PrinterObjs   []printer.IPrinter
 	ImageScanData []cautils.ImageScanData
 	scanError     error
+	closeOnce     sync.Once
+	closeErr      error
+	closed        bool
+}
+
+// Close releases writers exactly once, including callers that choose not to
+// render a partial result. The handler is single-use and not concurrently rendered.
+func (rh *ResultsHandler) Close() error {
+	if rh == nil {
+		return nil
+	}
+	rh.closeOnce.Do(func() {
+		rh.closed = true
+		if err := ClosePrinter(rh.UiPrinter); err != nil {
+			rh.closeErr = errors.Join(rh.closeErr, fmt.Errorf("ui printer close: %w", err))
+		}
+		for _, p := range rh.PrinterObjs {
+			if err := ClosePrinter(p); err != nil {
+				rh.closeErr = errors.Join(rh.closeErr, fmt.Errorf("output printer %T close: %w", p, err))
+			}
+		}
+	})
+	return rh.closeErr
 }
 
 func NewResultsHandler(reporterObj reporter.IReport, printerObjs []printer.IPrinter, uiPrinter printer.IPrinter) *ResultsHandler {
@@ -268,6 +292,11 @@ func restoreReport(sessionObj *cautils.OPASessionObj, snap reportSnapshot) {
 
 // HandleResults handles all necessary actions for the scan results
 func (rh *ResultsHandler) HandleResults(ctx context.Context, scanInfo *cautils.ScanInfo) (err error) {
+	defer func() {
+		if !rh.closed {
+			err = errors.Join(err, rh.Close())
+		}
+	}()
 	// The reporting span lives here rather than at the call sites so every
 	// entry point that produces output — scan, scan control/framework/workload,
 	// scan image and the patch flow — contributes the same phase to the trace.
@@ -342,9 +371,6 @@ func (rh *ResultsHandler) HandleResults(ctx context.Context, scanInfo *cautils.S
 	}
 
 	rh.UiPrinter.PrintNextSteps()
-	if err := ClosePrinter(rh.UiPrinter); err != nil {
-		printErr = errors.Join(printErr, fmt.Errorf("ui printer close: %w", err))
-	}
 
 	// Then print to output files
 	for _, p := range rh.PrinterObjs {
@@ -353,9 +379,6 @@ func (rh *ResultsHandler) HandleResults(ctx context.Context, scanInfo *cautils.S
 		}
 		if rh.ScanData != nil {
 			p.Score(rh.GetComplianceScore())
-		}
-		if err := ClosePrinter(p); err != nil {
-			printErr = errors.Join(printErr, fmt.Errorf("output printer %T close: %w", p, err))
 		}
 	}
 
@@ -397,7 +420,7 @@ func (rh *ResultsHandler) HandleResults(ctx context.Context, scanInfo *cautils.S
 		}
 	}
 
-	if err := errors.Join(printErr, rh.scanError); err != nil {
+	if err := errors.Join(printErr, rh.scanError, rh.Close()); err != nil {
 		return err
 	}
 

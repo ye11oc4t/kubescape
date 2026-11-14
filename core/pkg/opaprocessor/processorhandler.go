@@ -152,6 +152,9 @@ type OPAProcessor struct {
 	onBatchProcessed        func(batch *cautils.ResourceBatch)
 	onWholeClusterProcessed func(projectedBatch *cautils.ResourceBatch)
 	finalized               bool
+	finalizationErr         error
+	completedEvaluations    int
+	completedScopes         []string
 }
 
 // NewOPAProcessor snapshots len(sessionObj.AllResources) at construction for
@@ -291,9 +294,12 @@ func (opap *OPAProcessor) ProcessRulesListener(ctx context.Context, progressList
 		logger.L().Ctx(ctx).Warning(processErr.Error())
 	}
 
-	opap.finalizeResults(ctx)
+	if processErr != nil {
+		opap.markInterrupted()
+	}
+	finalErr := opap.finalizeResults(ctx)
 
-	return processErr
+	return errors.Join(processErr, finalErr)
 }
 
 // ProcessWithStreaming processes OPA policies using streaming resource batches.
@@ -356,6 +362,9 @@ func (opap *OPAProcessor) ProcessWithStreaming(ctx context.Context, batchChan <-
 					return fmt.Errorf("batch channel closed without resident batch")
 				}
 			}
+			if batch == nil {
+				return fmt.Errorf("nil resident batch")
+			}
 			if batch.Scope == cautils.ClusterScope {
 				residentBatch = batch
 			} else {
@@ -413,6 +422,7 @@ haveResident:
 	if err := opap.processScope(ctx, opap.AllPolicies, scopeControlIDs, residentScope, progressListener); err != nil {
 		return err
 	}
+	opap.completedScopes = append(opap.completedScopes, residentBatch.Scope)
 
 	// Process namespace batches as they arrive
 	for {
@@ -421,6 +431,9 @@ haveResident:
 			if !ok {
 				// Channel closed, no more batches
 				goto done
+			}
+			if batch == nil {
+				return fmt.Errorf("nil namespace batch")
 			}
 			if batch.Scope == cautils.ClusterScope {
 				return fmt.Errorf("received duplicate resident batch")
@@ -432,9 +445,6 @@ haveResident:
 
 			// Process this namespace batch
 			namespaceScope := newEvaluationScope(batch.Scope, batch, residentGroups)
-			if err := opap.processScope(ctx, opap.AllPolicies, scopeControlIDs, namespaceScope, progressListener); err != nil {
-				return err
-			}
 
 			// Merge namespace batch resources into the session-wide catalog so
 			// downstream stages (exception matching, printers, image scanning,
@@ -443,6 +453,12 @@ haveResident:
 			for gvr, ids := range batch.K8SResources {
 				opap.K8SResources[gvr] = append(opap.K8SResources[gvr], ids...)
 			}
+			// Retain resources before evaluation: an interrupted scope may have
+			// completed controls whose results refer to these objects.
+			if err := opap.processScope(ctx, opap.AllPolicies, scopeControlIDs, namespaceScope, progressListener); err != nil {
+				return err
+			}
+			opap.completedScopes = append(opap.completedScopes, batch.Scope)
 			if len(wholeClusterMatchers) > 0 && projectedBatch != nil {
 				appendProjectedResources(batch.K8SResources, nil, batch.AllResources, wholeClusterMatchers, projectedBatch)
 			}
@@ -510,17 +526,27 @@ done:
 		opap.onWholeClusterProcessed(projectedBatch)
 	}
 
-	opap.finalizeResults(ctx)
-	return nil
+	return opap.finalizeResults(ctx)
 }
 
 // finalizeResults runs after evaluation workers have stopped. The processor is
 // single-use: once finalized, no further evaluation may mutate its session.
 // Keeping this operation idempotent avoids repeating destructive resource
 // cleanup or rebuilding summaries from already aggregated state.
-func (opap *OPAProcessor) finalizeResults(ctx context.Context) {
+func (opap *OPAProcessor) finalizeResults(ctx context.Context) error {
 	if opap.finalized {
-		return
+		return opap.finalizationErr
+	}
+	opap.finalized = true
+	if opap.Report == nil || opap.AllPolicies == nil {
+		opap.finalizationErr = fmt.Errorf("missing finalization inputs")
+		return opap.finalizationErr
+	}
+	for id := range opap.ResourcesResult {
+		if _, ok := opap.GetResource(id); !ok {
+			opap.finalizationErr = fmt.Errorf("result has no resource in the accepted catalog")
+			return opap.finalizationErr
+		}
 	}
 	// Rebuild scan coverage
 	opap.ScanCoverage = cautils.BuildScanCoverage(opap.InfoMap, opap.ResourceToControlsMap, opap.notEvaluatedReasons(), opap.PartialGVRFailures, opap.PolicyDegradations, opap.SkippedManifests, opap.inScopeControlIDs())
@@ -536,6 +562,8 @@ func (opap *OPAProcessor) finalizeResults(ctx context.Context) {
 	scorewrapper := score.NewScoreWrapper(opap.OPASessionObj)
 	if err := scorewrapper.Calculate(score.EPostureReportV2); err != nil {
 		logger.L().Ctx(ctx).Warning("failed to calculate score", helpers.Error(err))
+		opap.finalizationErr = fmt.Errorf("finalize scores: %w", err)
+		return opap.finalizationErr
 	}
 
 	// BuildNamespaceSummaries relies on ControlSummary.ComplianceScore for
@@ -544,7 +572,7 @@ func (opap *OPAProcessor) finalizeResults(ctx context.Context) {
 	opap.NamespaceSummaries = cautils.BuildNamespaceSummariesFromCatalog(opap.Report.SummaryDetails.Controls, opap.GetCatalog())
 
 	opap.reweightComplianceScores()
-	opap.finalized = true
+	return nil
 }
 
 // processScope processes all controls for a single evaluation scope.
@@ -635,6 +663,11 @@ func (opap *OPAProcessor) processScope(ctx context.Context, policies *cautils.Po
 				}
 
 				// Update resources with latest results
+				if err == nil && !opap.controlNotEvaluated(controlID) {
+					opap.mu.Lock()
+					opap.completedEvaluations++
+					opap.mu.Unlock()
+				}
 				if len(resourcesAssociatedControl) > 0 {
 					opap.mu.Lock()
 					for resourceID, controlResult := range resourcesAssociatedControl {
@@ -703,6 +736,8 @@ func (opap *OPAProcessor) Process(ctx context.Context, policies *cautils.Policie
 		}
 		if err := opap.processScope(ctx, policies, scopeControlIDs, scope, progressListener); err != nil {
 			processErrs = append(processErrs, err)
+		} else {
+			opap.completedScopes = append(opap.completedScopes, scope.name)
 		}
 	}
 

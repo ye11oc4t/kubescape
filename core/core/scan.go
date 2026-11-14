@@ -884,6 +884,50 @@ func (ks *Kubescape) ScanContext(ctx context.Context, scanInfo *cautils.ScanInfo
 		return nil, errors.New("uninitialized scan parameters")
 	}
 
+	return ks.scanContext(ctx, scanInfo, policyIdentifiers, false)
+}
+
+// ScanWithOutcome transfers ownership of finalized results and their writers to
+// the caller, even when scanning was interrupted. Scan/ScanContext preserve the
+// legacy fail-on-error behavior and close writers on their error paths.
+func (ks *Kubescape) ScanWithOutcome(ctx context.Context, scanInfo *cautils.ScanInfo, policyIdentifiers []cautils.PolicyIdentifier) resultshandling.ScanOutcome {
+	if scanInfo == nil || scanInfo.DryRun {
+		return resultshandling.ScanOutcome{Completion: cautils.ScanFailed, FailedStage: cautils.StageInitialization, Err: fmt.Errorf("outcome API requires a posture scan; use ScanContext for dry-run")}
+	}
+	results, err := ks.scanContext(ctx, scanInfo, policyIdentifiers, true)
+	outcome := resultshandling.ScanOutcome{Completion: cautils.ScanFailed, FailedStage: cautils.StageInitialization, Err: err}
+	var staged *scanStageError
+	if errors.As(err, &staged) {
+		outcome.FailedStage = staged.stage
+	}
+	if results != nil && results.ScanData != nil && results.ScanData.ScanCompletion != nil {
+		completion := results.ScanData.ScanCompletion
+		if completion.Status == cautils.ScanComplete && err == nil || completion.Status == cautils.ScanPartial && err != nil {
+			outcome.Results, outcome.Completion, outcome.FailedStage = results, completion.Status, completion.FailedStage
+		}
+	}
+	return outcome
+}
+
+type scanStageError struct {
+	stage cautils.ScanStage
+	err   error
+}
+
+func (e *scanStageError) Error() string { return e.err.Error() }
+func (e *scanStageError) Unwrap() error { return e.err }
+
+func (ks *Kubescape) scanContext(ctx context.Context, scanInfo *cautils.ScanInfo, policyIdentifiers []cautils.PolicyIdentifier, allowPartial bool) (scanResult *resultshandling.ResultsHandler, scanErr error) {
+	stage := cautils.StageInitialization
+	var partialErr error
+	defer func() {
+		if scanErr != nil {
+			if partialErr != nil && !errors.Is(scanErr, partialErr) {
+				scanErr = errors.Join(partialErr, scanErr)
+			}
+			scanErr = &scanStageError{stage: stage, err: scanErr}
+		}
+	}()
 	var (
 		interfaces             componentInterfaces
 		getters                cautils.Getters
@@ -989,6 +1033,7 @@ func (ks *Kubescape) ScanContext(ctx context.Context, scanInfo *cautils.ScanInfo
 	}
 
 	// ===================== policies =====================
+	stage = cautils.StageInitialization
 	var scanData *cautils.OPASessionObj
 	err = func() error {
 		ctxPolicies, spanPolicies := otel.Tracer("").Start(ctx, "policies")
@@ -1031,6 +1076,7 @@ func (ks *Kubescape) ScanContext(ctx context.Context, scanInfo *cautils.ScanInfo
 	}
 
 	// ===================== resources =====================
+	stage = cautils.StageCollection
 	// Determine if streaming should be enabled
 	enableStreaming := scanInfo.EnableStreaming
 	// Snapshot the pre-scan cluster size before the streaming decision. The
@@ -1055,6 +1101,7 @@ func (ks *Kubescape) ScanContext(ctx context.Context, scanInfo *cautils.ScanInfo
 	defer spanOpa.End()
 
 	if enableStreaming {
+		stage = cautils.StageEvaluation
 		// Use streaming approach for large clusters
 		err = func() error {
 			ctxResources, spanResources := otel.Tracer("").Start(ctx, "resources")
@@ -1062,6 +1109,10 @@ func (ks *Kubescape) ScanContext(ctx context.Context, scanInfo *cautils.ScanInfo
 			return collectAndProcessResourcesWithStreaming(ctxResources, interfaces.resourceHandler, scanData, scanInfo, interfaces.tenantConfig.GetContextName(), scanInfo.ExcludedNamespaces, scanInfo.IncludeNamespaces, scanInfo.EnableRegoPrint, scanInfo.ControlTimeout, estimatedClusterSize)
 		}()
 		if err != nil {
+			if allowPartial && scanData.ScanCompletion != nil && scanData.ScanCompletion.Status == cautils.ScanPartial {
+				partialErr = err
+				goto producedResults
+			}
 			return resultsHandling, err
 		}
 	} else {
@@ -1076,6 +1127,7 @@ func (ks *Kubescape) ScanContext(ctx context.Context, scanInfo *cautils.ScanInfo
 		}
 
 		k8sConfig := k8sinterface.GetK8sConfig()
+		stage = cautils.StageEvaluation
 		if scanInfo.NoClusterAccess {
 			k8sConfig = nil
 		}
@@ -1096,6 +1148,13 @@ func (ks *Kubescape) ScanContext(ctx context.Context, scanInfo *cautils.ScanInfo
 			}()
 		}
 		if err = reportResults.ProcessRulesListener(ctxOpa, cautils.NewProgressHandler("")); err != nil {
+			if allowPartial {
+				err = reportResults.FinalizePartial(ctxOpa, err)
+				if scanData.ScanCompletion != nil && scanData.ScanCompletion.Status == cautils.ScanPartial {
+					partialErr = err
+					goto producedResults
+				}
+			}
 			logger.L().Ctx(ctxOpa).Error("failed to process rules", helpers.Error(err))
 			// The eager listener finalizes its accumulated results before returning
 			// an error. Streaming errors can return before that invariant holds.
@@ -1105,6 +1164,7 @@ func (ks *Kubescape) ScanContext(ctx context.Context, scanInfo *cautils.ScanInfo
 	}
 
 	// ======================== prioritization ===================
+	stage = cautils.StageEnrichment
 	if scanInfo.PrintAttackTree || isPrioritizationScanType(scanInfo.ScanType) {
 		err := func() error {
 			_, spanPrioritization := otel.Tracer("").Start(ctxOpa, "prioritization")
@@ -1132,7 +1192,17 @@ func (ks *Kubescape) ScanContext(ctx context.Context, scanInfo *cautils.ScanInfo
 		resultsHandling.SetScanError(scanImages(scanInfo.ScanType, scanData, ctx, resultsHandling, scanInfo, interfaces.k8s))
 	}
 	// ========================= results handling =====================
+producedResults:
+	stage = cautils.StageEnrichment
 	resultsHandling.SetData(scanData)
+	if allowPartial && partialErr == nil {
+		scanData.ScanCompletion = &cautils.ScanCompletionMetadata{Status: cautils.ScanComplete, Scores: "final", Coverage: "final"}
+	}
+	// Scope identities may contain names. Suppress them for privacy modes until
+	// the completion schema participates in their shared identifier mapping.
+	if scanData.ScanCompletion != nil && (scanInfo.Hide || scanInfo.EncryptionEnabled) {
+		scanData.ScanCompletion.CompletedScopes = nil
+	}
 
 	if scanInfo.EncryptionEnabled {
 
@@ -1183,7 +1253,10 @@ func (ks *Kubescape) ScanContext(ctx context.Context, scanInfo *cautils.ScanInfo
 	}
 
 	printersOwnedByScan = false
-	return resultsHandling, nil
+	if partialErr != nil {
+		stage = cautils.StageEvaluation
+	}
+	return resultsHandling, partialErr
 }
 
 func resolveClusterContext(scanInfo *cautils.ScanInfo) error {
@@ -1601,10 +1674,19 @@ func collectAndProcessResourcesWithStreaming(ctx context.Context, resourceHandle
 	reportResults.SetInitialResourceCount(estimatedClusterSize)
 
 	// Process batches with streaming
-	if err := reportResults.ProcessWithStreaming(streamCtx, batchChan, errChan, cautils.NewProgressHandler(""), expectedNamespaceBatches); err != nil {
-		return fmt.Errorf("failed to process rules with streaming: %w", err)
+	processErr := reportResults.ProcessWithStreaming(streamCtx, batchChan, errChan, cautils.NewProgressHandler(""), expectedNamespaceBatches)
+	// Producers close both channels on exit. Cancel before draining so a
+	// producer blocked on another batch can terminate. Draining is also the
+	// join: finalization must not race collection metadata writes.
+	cancel()
+	for range batchChan {
 	}
-
+	for producerErr := range errChan {
+		processErr = errors.Join(processErr, producerErr)
+	}
+	if processErr != nil {
+		return reportResults.FinalizePartial(ctx, fmt.Errorf("failed to process rules with streaming: %w", processErr))
+	}
 	return nil
 }
 

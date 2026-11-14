@@ -91,6 +91,7 @@ const (
 )
 
 type OPASessionObj struct {
+	ScanCompletion        *ScanCompletionMetadata
 	K8SResources          K8SResources                                  // input k8s objects
 	ExternalResources     ExternalResources                             // input non-k8s objects (external resources)
 	AllPolicies           *Policies                                     // list of all frameworks
