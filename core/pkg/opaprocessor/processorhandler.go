@@ -378,6 +378,9 @@ func (opap *OPAProcessor) ProcessWithStreaming(ctx context.Context, batchChan <-
 				errChan = nil
 				continue
 			}
+			if err == nil {
+				continue
+			}
 			return err
 		case <-ctx.Done():
 			return ctx.Err()
@@ -486,6 +489,9 @@ haveResident:
 		case err, ok := <-errChan:
 			if !ok {
 				errChan = nil
+				continue
+			}
+			if err == nil {
 				continue
 			}
 			return err
@@ -698,7 +704,7 @@ func (opap *OPAProcessor) processScope(ctx context.Context, policies *cautils.Po
 	// ordered results for every downstream consumer.
 	sortAssociatedControls(opap.ResourcesResult)
 
-	return errors.Join(processErrs...)
+	return errors.Join(errors.Join(processErrs...), ctx.Err())
 }
 
 // Process OPA policies (rules) on all configured controls.
