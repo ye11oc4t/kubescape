@@ -153,6 +153,7 @@ type OPAProcessor struct {
 	onWholeClusterProcessed func(projectedBatch *cautils.ResourceBatch)
 	finalized               bool
 	finalizationErr         error
+	scoreErr                error
 	completedEvaluations    int
 	completedScopes         []string
 }
@@ -562,8 +563,10 @@ func (opap *OPAProcessor) finalizeResults(ctx context.Context) error {
 	scorewrapper := score.NewScoreWrapper(opap.OPASessionObj)
 	if err := scorewrapper.Calculate(score.EPostureReportV2); err != nil {
 		logger.L().Ctx(ctx).Warning("failed to calculate score", helpers.Error(err))
-		opap.finalizationErr = fmt.Errorf("finalize scores: %w", err)
-		return opap.finalizationErr
+		// Complete scans retain the existing score-warning behavior (for
+		// example, when all controls are legitimately skipped). Partial
+		// finalization inspects scoreErr before publishing provisional values.
+		opap.scoreErr = fmt.Errorf("finalize scores: %w", err)
 	}
 
 	// BuildNamespaceSummaries relies on ControlSummary.ComplianceScore for

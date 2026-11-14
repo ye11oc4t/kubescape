@@ -6,6 +6,7 @@ import (
 	"slices"
 
 	"github.com/kubescape/kubescape/v4/core/cautils"
+	"github.com/kubescape/opa-utils/reporthandling/apis"
 )
 
 // markInterrupted conservatively marks control-wide coverage incomplete even
@@ -36,6 +37,22 @@ func (opap *OPAProcessor) FinalizePartial(ctx context.Context, primary error) er
 	}
 	if err := opap.finalizeResults(context.WithoutCancel(ctx)); err != nil {
 		return errors.Join(primary, err)
+	}
+	if opap.scoreErr != nil {
+		return errors.Join(primary, opap.scoreErr)
+	}
+	trustworthy := false
+	for _, result := range opap.ResourcesResult {
+		for _, control := range result.AssociatedControls {
+			for _, rule := range control.ResourceAssociatedRules {
+				if rule.Status == apis.StatusPassed || rule.Status == apis.StatusFailed {
+					trustworthy = true
+				}
+			}
+		}
+	}
+	if !trustworthy {
+		return primary
 	}
 	scopes := slices.Clone(opap.completedScopes)
 	slices.Sort(scopes)
