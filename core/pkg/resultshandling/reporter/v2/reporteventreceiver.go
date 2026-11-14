@@ -56,6 +56,9 @@ func NewReportEventReceiver(tenantConfig cautils.ITenantConfig, reportID string,
 }
 
 func (report *ReportEventReceiver) Submit(ctx context.Context, opaSessionObj *cautils.OPASessionObj) error {
+	if opaSessionObj != nil && opaSessionObj.ScanCompletion != nil && opaSessionObj.ScanCompletion.Status != cautils.ScanComplete {
+		return fmt.Errorf("complete-report protocol cannot submit a %s scan", opaSessionObj.ScanCompletion.Status)
+	}
 	ctx, span := otel.Tracer("").Start(ctx, "reportEventReceiver.Submit")
 	defer span.End()
 	report.reportTime = time.Now().UTC()

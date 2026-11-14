@@ -115,6 +115,9 @@ func (rh *ResultsHandler) GetReporter() reporter.IReport {
 
 // WriteJson streams the results in JSON format directly to the given writer
 func (rh *ResultsHandler) WriteJson(w io.Writer) error {
+	if rh.ScanData != nil && rh.ScanData.ScanCompletion != nil && rh.ScanData.ScanCompletion.Status == cautils.ScanPartial {
+		return errors.New("partial serialization requires the reporting migration")
+	}
 	finalizedReport := printerv2.FinalizeResults(rh.ScanData)
 	if finalizedReport == nil {
 		return fmt.Errorf("no data provided for JSON output")
@@ -297,6 +300,9 @@ func (rh *ResultsHandler) HandleResults(ctx context.Context, scanInfo *cautils.S
 			err = errors.Join(err, rh.Close())
 		}
 	}()
+	if rh.ScanData != nil && rh.ScanData.ScanCompletion != nil && rh.ScanData.ScanCompletion.Status == cautils.ScanPartial {
+		return errors.New("partial rendering requires the reporting migration")
+	}
 	// The reporting span lives here rather than at the call sites so every
 	// entry point that produces output — scan, scan control/framework/workload,
 	// scan image and the patch flow — contributes the same phase to the trace.
