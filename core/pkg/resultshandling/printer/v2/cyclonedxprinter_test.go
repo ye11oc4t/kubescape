@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+
 func TestSetWriter_CycloneDX_AppendsExtension(t *testing.T) {
 	cp := NewCycloneDXPrinter()
 	tmpDir := t.TempDir()
