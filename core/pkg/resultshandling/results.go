@@ -115,9 +115,6 @@ func (rh *ResultsHandler) GetReporter() reporter.IReport {
 
 // WriteJson streams the results in JSON format directly to the given writer
 func (rh *ResultsHandler) WriteJson(w io.Writer) error {
-	if rh.ScanData != nil && rh.ScanData.ScanCompletion != nil && rh.ScanData.ScanCompletion.Status == cautils.ScanPartial {
-		return errors.New("partial serialization requires the reporting migration")
-	}
 	finalizedReport := printerv2.FinalizeResults(rh.ScanData)
 	if finalizedReport == nil {
 		return fmt.Errorf("no data provided for JSON output")
@@ -152,14 +149,16 @@ func (rh *ResultsHandler) WriteJson(w io.Writer) error {
 
 	output := struct {
 		*reporthandlingv2.PostureReport
-		SummaryDetails     summaryWithEnrichment        `json:"summaryDetails,omitempty"`
-		Results            []resultWithEnrichment       `json:"results,omitempty"`
-		ResourceLabels     map[string]map[string]string `json:"resourceLabels,omitempty"`
-		ScanCoverage       *cautils.ScanCoverage        `json:"scanCoverage,omitempty"`
-		ExceptionAudit     *cautils.ExceptionAudit      `json:"exceptionAudit,omitempty"`
-		NamespaceSummaries cautils.NamespaceSummaries   `json:"namespaceSummaries,omitempty"`
+		ScanCompletion     *cautils.ScanCompletionMetadata `json:"scanCompletion,omitempty"`
+		SummaryDetails     summaryWithEnrichment           `json:"summaryDetails,omitempty"`
+		Results            []resultWithEnrichment          `json:"results,omitempty"`
+		ResourceLabels     map[string]map[string]string    `json:"resourceLabels,omitempty"`
+		ScanCoverage       *cautils.ScanCoverage           `json:"scanCoverage,omitempty"`
+		ExceptionAudit     *cautils.ExceptionAudit         `json:"exceptionAudit,omitempty"`
+		NamespaceSummaries cautils.NamespaceSummaries      `json:"namespaceSummaries,omitempty"`
 	}{
-		PostureReport: finalizedReport,
+		PostureReport:  finalizedReport,
+		ScanCompletion: rh.ScanData.ScanCompletion,
 		SummaryDetails: summaryWithEnrichment{
 			SummaryDetails: finalizedReport.SummaryDetails,
 			Controls:       enrichedReport.SummaryDetails.Controls,
@@ -300,8 +299,13 @@ func (rh *ResultsHandler) HandleResults(ctx context.Context, scanInfo *cautils.S
 			err = errors.Join(err, rh.Close())
 		}
 	}()
-	if rh.ScanData != nil && rh.ScanData.ScanCompletion != nil && rh.ScanData.ScanCompletion.Status == cautils.ScanPartial {
-		return errors.New("partial rendering requires the reporting migration")
+	if rh.IsPartial() {
+		for _, p := range append([]printer.IPrinter{rh.UiPrinter}, rh.PrinterObjs...) {
+			capability, ok := p.(interface{ SupportsPartialScan() bool })
+			if !ok || !capability.SupportsPartialScan() {
+				return fmt.Errorf("printer %T cannot identify partial scan results; use json, yaml or pretty-printer", p)
+			}
+		}
 	}
 	// The reporting span lives here rather than at the call sites so every
 	// entry point that produces output — scan, scan control/framework/workload,
@@ -323,7 +327,7 @@ func (rh *ResultsHandler) HandleResults(ctx context.Context, scanInfo *cautils.S
 	// stays behind the Active check: with no collector configured this must
 	// cost nothing.
 	defer func() {
-		if !telemetry.Active() {
+		if !telemetry.Active() || rh.IsPartial() {
 			return
 		}
 		telemetry.RecordScan(ctx, buildScanOutcome(rh.ScanData, rh.ImageScanData, scanInfo))
@@ -383,7 +387,7 @@ func (rh *ResultsHandler) HandleResults(ctx context.Context, scanInfo *cautils.S
 		if err := p.ActionPrint(ctx, rh.ScanData, filteredImageData); err != nil {
 			printErr = errors.Join(printErr, fmt.Errorf("output printer %T: %w", p, err))
 		}
-		if rh.ScanData != nil {
+		if rh.ScanData != nil && !rh.IsPartial() {
 			p.Score(rh.GetComplianceScore())
 		}
 	}
@@ -391,7 +395,7 @@ func (rh *ResultsHandler) HandleResults(ctx context.Context, scanInfo *cautils.S
 	// Deliver the same summary seen by output printers. Delivery is deliberately
 	// best-effort: a notification endpoint must never alter scan results or exit
 	// status.
-	if len(scanInfo.NotifyURLs) > 0 {
+	if len(scanInfo.NotifyURLs) > 0 && !rh.IsPartial() {
 		if rh.ScanData != nil && rh.ScanData.Report != nil {
 			client := notification.NewClient(notification.DefaultTimeout)
 			for _, endpoint := range scanInfo.NotifyURLs {
@@ -432,7 +436,7 @@ func (rh *ResultsHandler) HandleResults(ctx context.Context, scanInfo *cautils.S
 
 	// We should submit only after printing results, so a user can see
 	// results at all times, even if submission fails
-	if rh.ReporterObj != nil && scanInfo.Submit.GetBool() {
+	if rh.ReporterObj != nil && scanInfo.Submit.GetBool() && !rh.IsPartial() {
 		if err := rh.ReporterObj.Submit(ctx, rh.ScanData); err != nil {
 			return err
 		}

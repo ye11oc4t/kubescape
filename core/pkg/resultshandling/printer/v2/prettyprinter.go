@@ -48,6 +48,8 @@ type PrettyPrinter struct {
 	kubeconfig string
 }
 
+func (*PrettyPrinter) SupportsPartialScan() bool { return true }
+
 func NewPrettyPrinter(verboseMode bool, formatVersion string, attackTree bool, viewType cautils.ViewTypes, scanType cautils.ScanTypes, inputPatterns []string, clusterName string, showEvidence bool, showSecrets bool) *PrettyPrinter {
 	prettyPrinter := &PrettyPrinter{
 		verboseMode:     verboseMode,
@@ -103,6 +105,11 @@ func (pp *PrettyPrinter) PrintImageScan(imageScanData []cautils.ImageScanData) e
 
 func (pp *PrettyPrinter) ActionPrint(_ context.Context, opaSessionObj *cautils.OPASessionObj, imageScanData []cautils.ImageScanData) error {
 	if opaSessionObj != nil && opaSessionObj.Report != nil {
+		if opaSessionObj.ScanCompletion != nil && opaSessionObj.ScanCompletion.Status == cautils.ScanPartial {
+			if _, err := fmt.Fprintln(pp.writer, "PARTIAL SCAN — coverage and scores are provisional; submission skipped."); err != nil {
+				return err
+			}
+		}
 		if isPrintSeparatorType(pp.scanType) {
 			fmt.Fprintf(pp.writer, "\n%s\n\n",
 				gchalk.WithAnsi256(238).Bold(strings.Repeat("─", 50)))

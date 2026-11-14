@@ -119,6 +119,7 @@ type SummaryDetailsWithSeverity struct {
 
 // PostureReportWithSeverity wraps PostureReport to include severity in controls
 type PostureReportWithSeverity struct {
+	ScanCompletion       *cautils.ScanCompletionMetadata   `json:"scanCompletion,omitempty"`
 	ReportGenerationTime string                            `json:"generationTime"`
 	ClusterAPIServerInfo any                               `json:"clusterAPIServerInfo"`
 	ClusterCloudProvider string                            `json:"clusterCloudProvider"`

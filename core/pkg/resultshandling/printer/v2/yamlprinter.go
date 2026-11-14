@@ -24,6 +24,8 @@ type YamlPrinter struct {
 	writer *os.File
 }
 
+func (*YamlPrinter) SupportsPartialScan() bool { return true }
+
 func NewYamlPrinter() *YamlPrinter {
 	return &YamlPrinter{}
 }
@@ -133,6 +135,7 @@ func printConfigurationsScanningYaml(opaSessionObj *cautils.OPASessionObj, image
 	// on the posture report, so copy them in as the JSON report does.
 	reportWithSeverity.ExceptionAudit = opaSessionObj.ExceptionAudit
 	reportWithSeverity.NamespaceSummaries = opaSessionObj.NamespaceSummaries
+	reportWithSeverity.ScanCompletion = opaSessionObj.ScanCompletion
 
 	r, err := yaml.Marshal(reportWithSeverity)
 	if err != nil {

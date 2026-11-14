@@ -12,7 +12,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-
 func TestSetWriter_SPDX_AppendsExtension(t *testing.T) {
 	sp := NewSPDXPrinter()
 	tmpDir := t.TempDir()

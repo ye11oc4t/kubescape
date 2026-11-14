@@ -35,6 +35,8 @@ type JsonPrinter struct {
 	writer *os.File
 }
 
+func (*JsonPrinter) SupportsPartialScan() bool { return true }
+
 func NewJsonPrinter() *JsonPrinter {
 	return &JsonPrinter{}
 }
@@ -160,6 +162,9 @@ func writeConfigurationJSON(w io.Writer, opaSessionObj *cautils.OPASessionObj, i
 	s := newJSONStream(w)
 	s.raw("{")
 	first := true
+	if opaSessionObj.ScanCompletion != nil {
+		s.field(&first, "scanCompletion", opaSessionObj.ScanCompletion)
+	}
 	s.field(&first, "generationTime", header.ReportGenerationTime)
 	s.field(&first, "clusterAPIServerInfo", header.ClusterAPIServerInfo)
 	s.field(&first, "clusterCloudProvider", header.ClusterCloudProvider)
