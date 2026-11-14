@@ -86,5 +86,10 @@ func TestHTTPPartialDeliveryFailurePreservesScanError(t *testing.T) {
 	data, readErr := readResultsFile(id)
 	require.NoError(t, readErr)
 	require.True(t, json.Valid(data))
+	response, ok := partialResponseFromArtifact(data, id)
+	require.True(t, ok)
+	require.Equal(t, "unknown", response.DeliveryStatus)
+	response = readPartialDelivery(response)
+	require.Equal(t, "failed", response.DeliveryStatus)
 	require.FileExists(t, filepath.Join(out, id))
 }

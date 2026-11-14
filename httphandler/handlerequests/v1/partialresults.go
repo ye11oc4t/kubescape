@@ -72,7 +72,7 @@ func readPartialDelivery(fallback partialScanResponse) partialScanResponse {
 		return fallback
 	}
 	var persisted partialScanResponse
-	if json.Unmarshal(data, &persisted) != nil || persisted.ArtifactID != fallback.ArtifactID {
+	if json.Unmarshal(data, &persisted) != nil || persisted.ArtifactID != fallback.ArtifactID || persisted.Completion == nil || persisted.Completion.Status != cautils.ScanPartial {
 		return fallback
 	}
 	persisted.Artifact = fallback.Artifact
@@ -108,5 +108,5 @@ func partialResponseFromArtifact(data json.RawMessage, id string) (partialScanRe
 	if json.Unmarshal(data, &header) != nil || header.Completion == nil || header.Completion.Status != cautils.ScanPartial {
 		return partialScanResponse{}, false
 	}
-	return partialScanResponse{Completion: header.Completion, ArtifactID: id, Artifact: data, DeliveryStatus: "succeeded"}, true
+	return partialScanResponse{Completion: header.Completion, ArtifactID: id, Artifact: data, DeliveryStatus: "unknown", DeliveryCode: "DELIVERY_STATUS_UNAVAILABLE"}, true
 }
