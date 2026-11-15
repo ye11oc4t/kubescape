@@ -70,3 +70,20 @@ func TestFailedOutcomeDoesNotRender(t *testing.T) {
 	require.Nil(t, results)
 	require.ErrorIs(t, err, context.Canceled)
 }
+
+type legacyOutcomeScanner struct {
+	outcomeScannerStub
+	legacyCalled bool
+}
+
+func (s *legacyOutcomeScanner) ScanContext(context.Context, *cautils.ScanInfo, []cautils.PolicyIdentifier) (*resultshandling.ResultsHandler, error) {
+	s.legacyCalled = true
+	return nil, context.Canceled
+}
+
+func TestLegacyJSONUsesLegacyScanContext(t *testing.T) {
+	s := &legacyOutcomeScanner{}
+	_, err := scanPostureResults(context.Background(), &cautils.ScanInfo{Format: "json", FormatVersion: "v1"}, s, nil)
+	require.ErrorIs(t, err, context.Canceled)
+	require.True(t, s.legacyCalled)
+}

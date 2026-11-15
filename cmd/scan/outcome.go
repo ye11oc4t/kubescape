@@ -14,7 +14,7 @@ import (
 // to gates/fleet aggregation, which require a completed measurement.
 func scanPostureResults(ctx context.Context, info *cautils.ScanInfo, ks meta.IKubescape, policies []cautils.PolicyIdentifier) (*resultshandling.ResultsHandler, error) {
 	scanner, ok := ks.(resultshandling.OutcomeScanner)
-	if !ok || info.DryRun {
+	if !ok || info.DryRun || resultshandling.UsesLegacyJSONOutput(info) {
 		return ks.ScanContext(ctx, info, policies)
 	}
 	outcome := scanner.ScanWithOutcome(ctx, info, policies)
