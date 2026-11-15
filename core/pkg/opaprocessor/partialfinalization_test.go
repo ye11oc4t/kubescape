@@ -29,6 +29,7 @@ func TestPartialFinalizationAfterCompletedBatch(t *testing.T) {
 			require.ErrorIs(t, p.FinalizePartial(context.Background(), err), primary)
 			require.NotNil(t, session.ScanCompletion)
 			require.Equal(t, cautils.ScanPartial, session.ScanCompletion.Status)
+			require.Equal(t, cautils.StageCollection, session.ScanCompletion.FailedStage)
 			require.Equal(t, "provisional", session.ScanCompletion.Scores)
 			require.NotEmpty(t, session.ResourcesResult)
 		})
@@ -57,4 +58,15 @@ func TestPartialFinalizationRejectsUntrustedState(t *testing.T) {
 	require.ErrorIs(t, err, primary)
 	require.Contains(t, err.Error(), "accepted catalog")
 	require.Nil(t, session.ScanCompletion)
+}
+
+func TestPartialFinalizationPreservesEvaluationStage(t *testing.T) {
+	session, _ := brokenRuleSession()
+	session.Policies[0].Controls[0].Rules[0].Rule = failEveryPodRego
+	p := NewOPAProcessor(session, resources.NewRegoDependenciesDataMock(), "test", "", "", false, nil)
+	require.NoError(t, p.ProcessRulesListener(context.Background(), nil))
+	primary := cautils.AtScanStage(cautils.StageEvaluation, context.Canceled)
+	require.ErrorIs(t, p.FinalizePartial(context.Background(), primary), context.Canceled)
+	require.NotNil(t, session.ScanCompletion)
+	require.Equal(t, cautils.StageEvaluation, session.ScanCompletion.FailedStage)
 }

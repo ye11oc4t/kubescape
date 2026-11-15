@@ -290,7 +290,7 @@ func (opap *OPAProcessor) ProcessRulesListener(ctx context.Context, progressList
 	ConvertFrameworksToSummaryDetails(&opap.Report.SummaryDetails, frameworks, opap.AllPolicies)
 
 	// process
-	processErr := opap.Process(ctx, opap.AllPolicies, progressListener)
+	processErr := cautils.AtScanStage(cautils.StageEvaluation, opap.Process(ctx, opap.AllPolicies, progressListener))
 	if processErr != nil {
 		logger.L().Ctx(ctx).Warning(processErr.Error())
 	}
@@ -319,7 +319,8 @@ func (opap *OPAProcessor) ProcessRulesListener(ctx context.Context, progressList
 // namespace batch at a time), not total memory: the producer holds the whole
 // cluster while collecting, and this method retains every resource in
 // AllResources for downstream stages.
-func (opap *OPAProcessor) ProcessWithStreaming(ctx context.Context, batchChan <-chan *cautils.ResourceBatch, errChan <-chan error, progressListener IJobProgressNotificationClient, expectedNamespaceBatches int) error {
+func (opap *OPAProcessor) ProcessWithStreaming(ctx context.Context, batchChan <-chan *cautils.ResourceBatch, errChan <-chan error, progressListener IJobProgressNotificationClient, expectedNamespaceBatches int) (processErr error) {
+	defer func() { processErr = cautils.AtScanStage(cautils.StageEvaluation, processErr) }()
 	ctx, span := otel.Tracer("").Start(ctx, "OPAProcessor.ProcessWithStreaming")
 	defer span.End()
 	opap.loggerStartScanning()
@@ -355,22 +356,22 @@ func (opap *OPAProcessor) ProcessWithStreaming(ctx context.Context, batchChan <-
 				select {
 				case err, ok := <-errChan:
 					if ok && err != nil {
-						return fmt.Errorf("batch channel closed without resident batch: %w", err)
+						return cautils.AtScanStage(cautils.StageCollection, fmt.Errorf("batch channel closed without resident batch: %w", err))
 					}
 					// errChan closed without error — no resident batch was ever sent.
-					return fmt.Errorf("batch channel closed without resident batch")
+					return cautils.AtScanStage(cautils.StageCollection, fmt.Errorf("batch channel closed without resident batch"))
 				default:
-					return fmt.Errorf("batch channel closed without resident batch")
+					return cautils.AtScanStage(cautils.StageCollection, fmt.Errorf("batch channel closed without resident batch"))
 				}
 			}
 			if batch == nil {
-				return fmt.Errorf("nil resident batch")
+				return cautils.AtScanStage(cautils.StageCollection, fmt.Errorf("nil resident batch"))
 			}
 			if batch.Scope == cautils.ClusterScope {
 				residentBatch = batch
 			} else {
 				// First batch must be resident
-				return fmt.Errorf("first batch must be resident (cluster-scoped), got: %s", batch.Scope)
+				return cautils.AtScanStage(cautils.StageCollection, fmt.Errorf("first batch must be resident (cluster-scoped), got: %s", batch.Scope))
 			}
 			goto haveResident
 		case err, ok := <-errChan:
@@ -381,9 +382,9 @@ func (opap *OPAProcessor) ProcessWithStreaming(ctx context.Context, batchChan <-
 			if err == nil {
 				continue
 			}
-			return err
+			return cautils.AtScanStage(cautils.StageCollection, err)
 		case <-ctx.Done():
-			return ctx.Err()
+			return cautils.AtScanStage(cautils.StageCollection, ctx.Err())
 		}
 	}
 haveResident:
@@ -437,10 +438,10 @@ haveResident:
 				goto done
 			}
 			if batch == nil {
-				return fmt.Errorf("nil namespace batch")
+				return cautils.AtScanStage(cautils.StageCollection, fmt.Errorf("nil namespace batch"))
 			}
 			if batch.Scope == cautils.ClusterScope {
-				return fmt.Errorf("received duplicate resident batch")
+				return cautils.AtScanStage(cautils.StageCollection, fmt.Errorf("received duplicate resident batch"))
 			}
 
 			// A namespace's own Namespace object is scoped to this batch, so
@@ -494,9 +495,9 @@ haveResident:
 			if err == nil {
 				continue
 			}
-			return err
+			return cautils.AtScanStage(cautils.StageCollection, err)
 		case <-ctx.Done():
-			return ctx.Err()
+			return cautils.AtScanStage(cautils.StageCollection, ctx.Err())
 		}
 	}
 
@@ -505,7 +506,7 @@ done:
 	select {
 	case err, ok := <-errChan:
 		if ok && err != nil {
-			return err
+			return cautils.AtScanStage(cautils.StageCollection, err)
 		}
 	default:
 	}
@@ -540,7 +541,8 @@ done:
 // single-use: once finalized, no further evaluation may mutate its session.
 // Keeping this operation idempotent avoids repeating destructive resource
 // cleanup or rebuilding summaries from already aggregated state.
-func (opap *OPAProcessor) finalizeResults(ctx context.Context) error {
+func (opap *OPAProcessor) finalizeResults(ctx context.Context) (finalErr error) {
+	defer func() { finalErr = cautils.AtScanStage(cautils.StageFinalization, finalErr) }()
 	if opap.finalized {
 		return opap.finalizationErr
 	}

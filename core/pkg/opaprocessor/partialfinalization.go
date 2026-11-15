@@ -29,6 +29,7 @@ func (opap *OPAProcessor) markInterrupted() {
 // completion. Failure leaves no public completion marker and preserves both
 // errors. A pre-evaluation failure never manufactures a partial report.
 func (opap *OPAProcessor) FinalizePartial(ctx context.Context, primary error) error {
+	primary = cautils.AtScanStage(cautils.StageEvaluation, primary)
 	if primary == nil || opap.completedEvaluations == 0 || len(opap.ResourcesResult) == 0 {
 		return primary
 	}
@@ -39,7 +40,7 @@ func (opap *OPAProcessor) FinalizePartial(ctx context.Context, primary error) er
 		return errors.Join(primary, err)
 	}
 	if opap.scoreErr != nil {
-		return errors.Join(primary, opap.scoreErr)
+		return errors.Join(primary, cautils.AtScanStage(cautils.StageFinalization, opap.scoreErr))
 	}
 	trustworthy := false
 	for _, result := range opap.ResourcesResult {
@@ -65,7 +66,7 @@ func (opap *OPAProcessor) FinalizePartial(ctx context.Context, primary error) er
 		reason = "SCAN_DEADLINE_EXCEEDED"
 	}
 	opap.ScanCompletion = &cautils.ScanCompletionMetadata{
-		Status: cautils.ScanPartial, FailedStage: cautils.StageEvaluation,
+		Status: cautils.ScanPartial, FailedStage: cautils.FailedScanStage(primary, cautils.StageEvaluation),
 		ReasonCode: reason, CompletedScopes: scopes, Scores: "provisional", Coverage: "provisional",
 		SkippedScanStages: []cautils.ScanStage{cautils.StageEnrichment},
 	}

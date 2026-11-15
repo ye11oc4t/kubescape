@@ -894,12 +894,12 @@ func (ks *Kubescape) ScanWithOutcome(ctx context.Context, scanInfo *cautils.Scan
 	if scanInfo == nil || scanInfo.DryRun {
 		return resultshandling.ScanOutcome{Completion: cautils.ScanFailed, FailedStage: cautils.StageInitialization, Err: fmt.Errorf("outcome API requires a posture scan; use ScanContext for dry-run")}
 	}
+	if resultshandling.UsesLegacyJSONOutput(scanInfo) {
+		return resultshandling.ScanOutcome{Completion: cautils.ScanFailed, FailedStage: cautils.StageInitialization, Err: resultshandling.ErrLegacyScanOutput}
+	}
 	results, err := ks.scanContext(ctx, scanInfo, policyIdentifiers, true)
 	outcome := resultshandling.ScanOutcome{Completion: cautils.ScanFailed, FailedStage: cautils.StageInitialization, Err: err}
-	var staged *scanStageError
-	if errors.As(err, &staged) {
-		outcome.FailedStage = staged.stage
-	}
+	outcome.FailedStage = cautils.FailedScanStage(err, cautils.StageInitialization)
 	if results != nil && results.ScanData != nil && results.ScanData.ScanCompletion != nil {
 		completion := results.ScanData.ScanCompletion
 		if completion.Status == cautils.ScanComplete && err == nil || completion.Status == cautils.ScanPartial && err != nil {
@@ -909,14 +909,6 @@ func (ks *Kubescape) ScanWithOutcome(ctx context.Context, scanInfo *cautils.Scan
 	return outcome
 }
 
-type scanStageError struct {
-	stage cautils.ScanStage
-	err   error
-}
-
-func (e *scanStageError) Error() string { return e.err.Error() }
-func (e *scanStageError) Unwrap() error { return e.err }
-
 func (ks *Kubescape) scanContext(ctx context.Context, scanInfo *cautils.ScanInfo, policyIdentifiers []cautils.PolicyIdentifier, allowPartial bool) (scanResult *resultshandling.ResultsHandler, scanErr error) {
 	stage := cautils.StageInitialization
 	var partialErr error
@@ -925,7 +917,7 @@ func (ks *Kubescape) scanContext(ctx context.Context, scanInfo *cautils.ScanInfo
 			if partialErr != nil && !errors.Is(scanErr, partialErr) {
 				scanErr = errors.Join(partialErr, scanErr)
 			}
-			scanErr = &scanStageError{stage: stage, err: scanErr}
+			scanErr = cautils.AtScanStage(stage, scanErr)
 		}
 	}()
 	var (
@@ -1666,7 +1658,7 @@ func collectAndProcessResourcesWithStreaming(ctx context.Context, resourceHandle
 
 	batchChan, errChan, expectedNamespaceBatches, err := resourceHandler.StreamResourcesBatches(streamCtx, scanData, scanInfo)
 	if err != nil {
-		return fmt.Errorf("failed to start resource streaming: %w", err)
+		return cautils.AtScanStage(cautils.StageCollection, fmt.Errorf("failed to start resource streaming: %w", err))
 	}
 	// AllResources is still empty here — the producer goroutine fills it only
 	// after the resident batch is sent — so the frozen bucketing count must
@@ -1682,7 +1674,7 @@ func collectAndProcessResourcesWithStreaming(ctx context.Context, resourceHandle
 	for range batchChan {
 	}
 	for producerErr := range errChan {
-		processErr = errors.Join(processErr, producerErr)
+		processErr = errors.Join(processErr, cautils.AtScanStage(cautils.StageCollection, producerErr))
 	}
 	if processErr != nil {
 		return reportResults.FinalizePartial(ctx, fmt.Errorf("failed to process rules with streaming: %w", processErr))

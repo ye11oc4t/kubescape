@@ -1,5 +1,7 @@
 package cautils
 
+import "errors"
+
 // ScanCompletion describes production of a posture result, independently of
 // rendering, persistence, submission, and CI gates. Empty means a legacy producer.
 type ScanCompletion string
@@ -9,6 +11,36 @@ const (
 	ScanPartial  ScanCompletion = "partial"
 	ScanFailed   ScanCompletion = "failed"
 )
+
+// ScanStageError preserves the stage at the boundary where an error originates.
+// Errors remain unwrap-compatible; later callers must not relabel a producer
+// failure as an evaluation failure merely because evaluation was in progress.
+type ScanStageError struct {
+	Stage ScanStage
+	Err   error
+}
+
+func (e *ScanStageError) Error() string { return e.Err.Error() }
+func (e *ScanStageError) Unwrap() error { return e.Err }
+
+func AtScanStage(stage ScanStage, err error) error {
+	if err == nil {
+		return nil
+	}
+	var located *ScanStageError
+	if errors.As(err, &located) {
+		return err
+	}
+	return &ScanStageError{Stage: stage, Err: err}
+}
+
+func FailedScanStage(err error, fallback ScanStage) ScanStage {
+	var located *ScanStageError
+	if errors.As(err, &located) {
+		return located.Stage
+	}
+	return fallback
+}
 
 type ScanStage string
 
