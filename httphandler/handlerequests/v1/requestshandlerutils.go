@@ -44,6 +44,9 @@ var scanImpl = scan // Override for testing
 
 // runKubescapeScan is the scanner construction seam used by lifecycle tests.
 var runKubescapeScan = func(ctx context.Context, scanInfo *cautils.ScanInfo, policyIdentifiers []cautils.PolicyIdentifier) (*resultshandling.ResultsHandler, error) {
+	if resultshandling.UsesLegacyJSONOutput(scanInfo) {
+		return core.NewKubescape(ctx).ScanContext(ctx, scanInfo, policyIdentifiers)
+	}
 	outcome := core.NewKubescape(ctx).ScanWithOutcome(ctx, scanInfo, policyIdentifiers)
 	return outcome.Results, outcome.Err
 }
