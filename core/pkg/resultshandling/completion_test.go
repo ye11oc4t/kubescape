@@ -81,3 +81,16 @@ func TestPartialReportRejectsUnsupportedPrinter(t *testing.T) {
 	h.ScanData.ScanCompletion = &cautils.ScanCompletionMetadata{Status: cautils.ScanPartial}
 	require.ErrorContains(t, h.HandleResults(context.Background(), &cautils.ScanInfo{}), "cannot identify partial")
 }
+
+func TestPartialJSONWithSilentUI(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "partial.json")
+	output := printerv2.NewJsonPrinter()
+	require.NoError(t, output.SetWriter(context.Background(), path))
+	h := NewResultsHandler(nil, []printer.IPrinter{output}, &printerv2.SilentPrinter{})
+	h.SetData(cautils.NewOPASessionObjMock())
+	h.ScanData.ScanCompletion = &cautils.ScanCompletionMetadata{Status: cautils.ScanPartial, Scores: "provisional", Coverage: "provisional"}
+	require.NoError(t, h.HandleResults(context.Background(), &cautils.ScanInfo{}))
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.Contains(t, string(data), `"status":"partial"`)
+}

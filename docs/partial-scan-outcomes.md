@@ -4,6 +4,10 @@ The additive `ScanWithOutcome(ctx, scanInfo, policies)` API distinguishes a
 complete scan, a finalized partial scan, and a failed scan without publishable
 results. `Scan` and `ScanContext` retain their existing error behavior. Dry-run
 continues to use `ScanContext` because it produces no posture artifact.
+V1 JSON also stays on `ScanContext`: its legacy framework object/array shape
+cannot carry the new completion contract without a wire change. CLI and HTTP
+fall back automatically; direct `ScanWithOutcome` calls reject v1 JSON before
+opening output files. Select `--format-version=v2` to use explicit outcomes.
 
 | Completion | Results | Scan error |
 | --- | --- | --- |
@@ -16,12 +20,16 @@ call `Close`. Rendering, closing, persistence, submission and threshold errors
 do not change the scan's completion. Preserve the scan error when combining it
 with those errors, using `errors.Join` rather than replacing it.
 
-JSON, YAML and pretty output support partial results. Machine output from the
-new API explicitly carries `scanCompletion.status` for both complete and partial
+V2 JSON, YAML and pretty output support partial results. V2 JSON and YAML from
+the new API explicitly carry `scanCompletion.status` for both complete and partial
 scans. Legacy producers omit the block; absence means unspecified, not complete.
 Partial artifacts contain stable reason codes, provisional score/coverage flags,
 and known completed scope identities. Scope identities are omitted under `--hide`
 and `--encrypt`. Original error strings are not copied into report metadata.
+Failure stages preserve the originating boundary: a producer error remains
+`resource-collection` even when evaluation is active; evaluator and finalizer
+errors retain their own stages. Error wrapping preserves `errors.Is` and
+`errors.As` for callers.
 
 Other printers reject partial rendering until they can encode completion safely.
 Partial reports are not submitted through the existing complete-report protocol,

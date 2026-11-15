@@ -13,6 +13,10 @@ var _ printer.IPrinter = &SilentPrinter{}
 type SilentPrinter struct {
 }
 
+// The UI sink emits no artifact. A separate JSON/YAML printer owns the partial
+// marker when machine output suppresses terminal rendering.
+func (*SilentPrinter) SupportsPartialScan() bool { return true }
+
 func (silentPrinter *SilentPrinter) PrintNextSteps() {
 
 }

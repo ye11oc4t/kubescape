@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/kubescape/kubescape/v4/core/cautils"
+	"github.com/kubescape/kubescape/v4/core/pkg/resultshandling"
 	"github.com/kubescape/opa-utils/reporthandling/apis"
 	"github.com/stretchr/testify/require"
 )
@@ -47,6 +48,27 @@ func TestScanWithOutcomePreResultFailureKeepsExistingOutput(t *testing.T) {
 	require.Equal(t, "previous report", string(data))
 }
 
+func TestScanWithOutcomeRejectsLegacyJSONBeforeOpeningOutput(t *testing.T) {
+	info, policies, _ := buildBrokenRuleScanInfo(t)
+	info.Format, info.FormatVersion = "json", "v1"
+	info.Output = filepath.Join(t.TempDir(), "legacy.json")
+	require.NoError(t, os.WriteFile(info.Output, []byte("existing legacy report"), 0o600))
+	ks := NewKubescape(context.Background())
+	outcome := ks.ScanWithOutcome(context.Background(), info, policies)
+	require.ErrorIs(t, outcome.Err, resultshandling.ErrLegacyScanOutput)
+	require.Equal(t, cautils.ScanFailed, outcome.Completion)
+	require.Nil(t, outcome.Results)
+	before, err := os.ReadFile(info.Output)
+	require.NoError(t, err)
+	require.Equal(t, "existing legacy report", string(before))
+	results, err := ks.ScanContext(context.Background(), info, policies)
+	require.NoError(t, err)
+	require.NoError(t, results.HandleResults(context.Background(), info))
+	legacy, err := os.ReadFile(info.Output)
+	require.NoError(t, err)
+	require.NotContains(t, string(legacy), "scanCompletion")
+}
+
 type joinedStreamingMock struct {
 	streamingCancelMock
 	done chan struct{}
@@ -73,6 +95,7 @@ func TestStreamingFailureJoinsProducerBeforeReturning(t *testing.T) {
 	defer cancel()
 	err := collectAndProcessResourcesWithStreaming(ctx, m, session, &cautils.ScanInfo{}, "test", "", "", false, 0, 10)
 	require.ErrorContains(t, err, "first batch must be resident")
+	require.Equal(t, cautils.StageCollection, cautils.FailedScanStage(err, cautils.StageInitialization))
 	select {
 	case <-m.done:
 	default:
